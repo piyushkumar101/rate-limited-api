@@ -28,7 +28,7 @@ A production-grade, thread-safe API service built in **Go** with per-user slidin
 
 ```bash
 # Clone the repository
-git clone https://github.com/<your-username>/rate-limited-api.git
+git clone https://github.com/piyushkumar101/rate-limited-api.git
 cd rate-limited-api
 
 # Install dependencies
