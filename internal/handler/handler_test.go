@@ -12,7 +12,7 @@ import (
 	"github.com/rate-limited-api/internal/store"
 )
 
-func newTestStore() *store.MemoryStore {
+func newTestStore() store.Store {
 	return store.New(store.Config{MaxRequests: 5, WindowSize: time.Minute})
 }
 
@@ -197,6 +197,42 @@ func TestRequestHandler_IndependentUsers(t *testing.T) {
 
 	if rr.Code != http.StatusCreated {
 		t.Fatalf("expected 201 for user2, got %d", rr.Code)
+	}
+}
+
+func TestRequestHandler_WithQueueEnabled(t *testing.T) {
+	s := newTestStore()
+
+	// Import queue package
+	q := newTestQueue(s)
+	defer q.Stop()
+
+	h := &RequestHandler{Store: s, Queue: q}
+
+	// Fill rate limit
+	for i := 0; i < 5; i++ {
+		body := `{"user_id": "user1", "payload": {"i": 1}}`
+		req := httptest.NewRequest(http.MethodPost, "/request", bytes.NewBufferString(body))
+		req.Header.Set("Content-Type", "application/json")
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+	}
+
+	// 6th should be queued (HTTP 202), not rejected
+	body := `{"user_id": "user1", "payload": {"i": 5}}`
+	req := httptest.NewRequest(http.MethodPost, "/request", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("expected 202 (Accepted/Queued), got %d. Body: %s", rr.Code, rr.Body.String())
+	}
+
+	var resp model.APIResponse
+	json.NewDecoder(rr.Body).Decode(&resp)
+	if !resp.Success {
+		t.Fatal("expected success: true for queued request")
 	}
 }
 

@@ -76,3 +76,13 @@ type HealthResponse struct {
 	Uptime    float64 `json:"uptime_seconds"`
 	Timestamp string  `json:"timestamp"`
 }
+
+// QueuedResponseData is returned when a request is queued for retry.
+type QueuedResponseData struct {
+	QueueID       string `json:"queue_id"`
+	UserID        string `json:"user_id"`
+	Status        string `json:"status"`
+	MaxRetries    int    `json:"max_retries"`
+	Message       string `json:"message"`
+}
+

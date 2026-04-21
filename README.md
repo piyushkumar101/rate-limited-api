@@ -9,12 +9,16 @@ A production-grade, thread-safe API service built in **Go** with per-user slidin
 - **POST `/request`** — Accept requests with `{ user_id, payload }`, rate-limited per user
 - **GET `/stats`** — Return per-user request statistics
 - **GET `/health`** — Service health check with uptime
+- **GET `/queue`** — Check status of a queued request
+- **Pluggable Store** — Supports both **in-memory** and **Redis** backends
+- **Distributed Rate Limiting** — Redis Lua scripts for atomic multi-instance scaling
+- **Retry Queue** — Optional exponential backoff queue for rate-limited requests
 - **Sliding Window Rate Limiting** — 5 requests per user per minute
-- **Thread-Safe** — Mutex-protected store handles true parallel goroutine access
+- **Thread-Safe** — Mutex/Lua protected store handles true parallel goroutine access
 - **Standard Rate Limit Headers** — `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`, `Retry-After`
 - **Graceful Shutdown** — Signal handling with configurable drain timeout
-- **Docker Support** — Multi-stage build with non-root user
-- **Comprehensive Tests** — Unit, integration, and concurrency tests (24 tests)
+- **Docker Support** — Includes `docker-compose.yml` for easy setup with Redis
+- **Comprehensive Tests** — Unit, integration, queue, and concurrency tests
 
 ---
 
@@ -53,25 +57,27 @@ go test -race -v ./...
 go test -v -run TestConcurrency ./internal/store/
 ```
 
-### Run with Docker
+### Run with Docker Compose (Includes Redis + Queue)
 
 ```bash
-# Build image
-docker build -t rate-limited-api .
-
-# Run container
-docker run -p 3000:3000 rate-limited-api
+docker-compose up --build
 ```
+This starts the Go API and a Redis container automatically.
+The API will be available on `http://localhost:3000`.
 
 ### Configuration
 
-| Variable | Default | Description                |
-|----------|---------|----------------------------|
-| `PORT`   | `3000`  | Server port                |
-| `HOST`   | `0.0.0.0` | Bind address            |
+| Variable        | Default       | Description                                  |
+|-----------------|---------------|----------------------------------------------|
+| `PORT`          | `3000`        | Server port                                  |
+| `HOST`          | `0.0.0.0`     | Bind address                                 |
+| `STORE_BACKEND` | `memory`      | `"memory"` or `"redis"`                      |
+| `REDIS_ADDR`    | `localhost:6379`| Redis connection address                     |
+| `ENABLE_QUEUE`  | `false`       | Set to `"true"` to queue rate-limited reqs   |
 
 ```bash
-PORT=8080 go run main.go
+# Run with Redis and Queue enabled
+STORE_BACKEND=redis ENABLE_QUEUE=true go run main.go
 ```
 
 ---
@@ -158,6 +164,27 @@ Returns per-user request statistics.
     ]
   },
   "timestamp": "2024-01-15T10:30:30.000Z"
+}
+```
+
+### GET /queue?id={queue_id}
+
+Check the status of a request that hit the rate limit but was added to the background retry queue.
+
+**Response (200):**
+```json
+{
+  "success": true,
+  "data": {
+    "queue_id": "q-a1b2c3d4...",
+    "request_id": "a1b2c3d4...",
+    "user_id": "alice",
+    "status": "queued",
+    "attempts": 2,
+    "max_retries": 5,
+    "queued_at": "2024-01-15T10:30:00.000Z"
+  },
+  "timestamp": "2024-01-15T10:30:05.000Z"
 }
 ```
 
@@ -263,22 +290,7 @@ The concurrency test (`TestConcurrency_ExactlyNAllowed`) fires **50 concurrent g
 
 ## What I Would Improve With More Time
 
-### 1. Redis-Backed Store
-Replace the in-memory store with Redis for:
-- **Persistence** across restarts
-- **Horizontal scaling** — multiple API instances sharing the same rate limit state
-- Redis's `MULTI/EXEC` or Lua scripting for atomic rate limiting operations
-
-### 2. Distributed Rate Limiting
-The current in-memory approach only works for a single instance. With Redis or a distributed cache, the rate limiter would work across a cluster of API servers behind a load balancer.
-
-### 3. Request Queue / Retry Logic
-Instead of rejecting rate-limited requests outright, queue them and process when capacity is available:
-- Priority queue per user
-- Exponential backoff for retries
-- Dead-letter queue for repeatedly failed requests
-
-### 4. Configurable Rate Limits Per User
+### 1. Configurable Rate Limits Per User
 Instead of a global 5 req/min, support per-user tiers:
 - Free tier: 5 req/min
 - Pro tier: 100 req/min

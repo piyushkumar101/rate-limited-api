@@ -11,12 +11,14 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/rate-limited-api/internal/model"
+	"github.com/rate-limited-api/internal/queue"
 	"github.com/rate-limited-api/internal/store"
 )
 
 // RequestHandler handles POST /request.
 type RequestHandler struct {
-	Store *store.MemoryStore
+	Store store.Store
+	Queue *queue.RequestQueue // nil = no queueing, reject immediately
 }
 
 // ServeHTTP processes incoming requests with validation and rate limiting.
@@ -63,6 +65,39 @@ func (h *RequestHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(result.ResetAt.Unix(), 10))
 		w.Header().Set("Retry-After", strconv.FormatInt(int64(result.ResetAt.Sub(time.Now()).Seconds())+1, 10))
 
+		// If queue is enabled, queue the request instead of rejecting
+		if h.Queue != nil {
+			item, err := h.Queue.Enqueue(body.UserID, body.Payload, requestID)
+			if err != nil {
+				// Queue is full — reject outright
+				writeJSON(w, http.StatusTooManyRequests, model.APIError{
+					Success: false,
+					Error: model.ErrorDetail{
+						Code:         "RATE_LIMIT_EXCEEDED",
+						Message:      fmt.Sprintf("Rate limit exceeded and queue is full for user '%s'.", body.UserID),
+						RetryAfterMs: result.RetryAfterMs,
+					},
+					Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+				})
+				return
+			}
+
+			// Request queued for retry
+			writeJSON(w, http.StatusAccepted, model.APIResponse{
+				Success: true,
+				Data: model.QueuedResponseData{
+					QueueID:    item.ID,
+					UserID:     body.UserID,
+					Status:     "queued",
+					MaxRetries: item.MaxRetries,
+					Message:    "Request rate-limited but queued for automatic retry.",
+				},
+				Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+			})
+			return
+		}
+
+		// No queue — reject immediately
 		writeJSON(w, http.StatusTooManyRequests, model.APIError{
 			Success: false,
 			Error: model.ErrorDetail{
